@@ -24,10 +24,10 @@ flowchart TB
 
     DB[(PostgreSQL)]
 
-    UI -- JWT (user) --> API
-    W1 -- API key -> worker JWT --> API
-    W2 -- API key -> worker JWT --> API
-    W3 -- API key -> worker JWT --> API
+    UI -- user JWT --> API
+    W1 -- API key, then worker JWT --> API
+    W2 -- API key, then worker JWT --> API
+    W3 -- API key, then worker JWT --> API
     API -- SQLAlchemy async --> DB
     SCHED -- direct DB access --> DB
 
@@ -65,14 +65,14 @@ difference to Postgres's row-locking guarantees — see
 ```mermaid
 stateDiagram-v2
     [*] --> queued: immediate job created
-    [*] --> scheduled: delayed / scheduled / recurring job created
-    scheduled --> claimed: scheduled_for/next_retry_at has passed AND claimed by a worker
+    [*] --> scheduled: delayed, scheduled, or recurring job created
+    scheduled --> claimed: wake time has passed and claimed by a worker
     queued --> claimed: claimed by a worker
-    claimed --> running: worker calls /jobs/{id}/start
-    running --> completed: worker calls /jobs/{id}/complete
-    running --> scheduled: worker calls /jobs/{id}/fail AND attempts remain (backoff applied)
-    running --> dead_letter: worker calls /jobs/{id}/fail AND attempts exhausted
-    dead_letter --> queued: admin retries via /dead-letter/{id}/retry
+    claimed --> running: worker calls job start
+    running --> completed: worker calls job complete
+    running --> scheduled: worker calls job fail, attempts remain, backoff applied
+    running --> dead_letter: worker calls job fail, attempts exhausted
+    dead_letter --> queued: admin retries via dead letter retry
     queued --> cancelled: admin cancels
     scheduled --> cancelled: admin cancels
     completed --> [*]
@@ -162,20 +162,23 @@ less moving part, and Postgres already guarantees the right delivery semantics f
 
 ```mermaid
 sequenceDiagram
-    participant Client as Worker/API caller
-    participant API as API server (in a DB transaction)
+    participant Client as Worker or API caller
+    participant API as API server
     participant PG as Postgres
-    participant WS as WebSocket handler (dedicated LISTEN connection)
+    participant WS as WebSocket handler
     participant Browser
 
-    Client->>API: e.g. POST /jobs/{id}/complete
-    API->>PG: UPDATE jobs SET status=... ; SELECT pg_notify('job_events', payload)
+    Note over API: holds one open DB transaction for the request
+    Client->>API: e.g. POST job complete
+    API->>PG: UPDATE jobs SET status = completed
+    API->>PG: SELECT pg_notify('job_events', payload)
     API->>PG: COMMIT
     Note over PG: NOTIFY is only delivered on commit -- a listener never<br/>sees an event for a change that gets rolled back
-    PG-->>WS: async notification (job_events channel)
-    WS->>WS: filter: does payload.queue_id match this connection's queue?
+    PG-->>WS: async notification on job_events channel
+    Note over WS: dedicated LISTEN connection, one per browser tab
+    WS->>WS: filter -- does payload.queue_id match this connection's queue?
     WS-->>Browser: forward matching event over the socket
-    Browser->>Browser: bump refetch counter -> instant UI update
+    Browser->>Browser: bump refetch counter, instant UI update
 ```
 
 Every job state transition (create, claim, start, complete, fail→retry, fail→dead-letter,

@@ -128,8 +128,8 @@ erDiagram
     }
     JOB_DEPENDENCY {
         uuid id PK
-        uuid job_id FK "cannot be claimed until..."
-        uuid depends_on_job_id FK "...this job reaches 'completed'"
+        uuid job_id FK "the blocked job"
+        uuid depends_on_job_id FK "must reach completed status first"
     }
     JOB_LOG {
         uuid id PK
