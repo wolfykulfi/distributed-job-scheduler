@@ -42,13 +42,16 @@ key that doesn't exist until you've created a project through the dashboard — 
 [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) for why workers authenticate this way at
 all, and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full request flow.
 
-> **Note on this repo's dev environment:** this project was built and tested on a machine
-> without Docker available, using a portable local PostgreSQL instance instead. The
-> `docker-compose.yml` mirrors the exact commands (`alembic upgrade head`, `uvicorn ...`,
-> `python -m app.worker.run_worker`, `python -m app.scheduler.run_scheduler`) that were verified
-> working end-to-end locally, with `DATABASE_URL` repointed at the `postgres` service — but the
-> compose file itself has only been YAML-validated, not run, since Docker wasn't installed in
-> that environment. Worth a first real run before treating it as fully proven.
+> **Verified with Docker.** `docker compose up postgres api scheduler frontend` plus
+> `docker compose --profile workers up worker` were run end-to-end: Postgres → Alembic
+> migrations → API → scheduler → frontend all start cleanly with correct health-check-gated
+> startup ordering, and a containerized worker registered, claimed, executed, and completed a
+> real job, then shut down gracefully on `docker compose stop` (SIGTERM → drain → shutdown).
+> One real bug was caught and fixed in the process: `scheduler` originally only waited on
+> Postgres being healthy, not on the API's migrations finishing, causing a one-time race on cold
+> start (harmless — the loop catches and logs the error rather than crashing — but fixed
+> properly by adding a `/healthz`-based healthcheck to `api` and gating `scheduler`/`frontend`/
+> `worker` on it).
 
 ## Local development (without Docker)
 

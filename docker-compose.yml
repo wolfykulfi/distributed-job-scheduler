@@ -26,6 +26,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      # No curl in python:slim -- a stdlib urlopen is enough, and also proves the app (not
+      # just the container) is actually accepting requests.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
 
   worker:
     build: ./backend
@@ -40,7 +47,7 @@ services:
       WORKER_CONCURRENCY: 4
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
 
   scheduler:
     build: ./backend
@@ -48,7 +55,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://scheduler:scheduler@postgres:5432/scheduler
     depends_on:
-      postgres:
+      # Waits for /healthz, not just postgres -- migrations run as part of the api service's
+      # startup command, and the scheduler queries tables that don't exist until they've run.
+      api:
         condition: service_healthy
 
   frontend:
@@ -59,7 +68,8 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:
