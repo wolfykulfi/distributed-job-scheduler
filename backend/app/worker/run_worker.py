@@ -96,15 +96,25 @@ class Worker:
             job_id = job["id"]
             try:
                 await self.client.start_job(job_id)
+                await self._safe_log(job_id, "info", f"Claimed by {socket.gethostname()}, starting execution")
                 handler = get_handler(job["name"])
                 result = await handler(job["payload"])
                 await self.client.complete_job(job_id, result)
+                await self._safe_log(job_id, "info", "Execution completed successfully")
                 logger.info("Job %s (%s) completed", job_id, job["name"])
             except Exception as exc:
+                await self._safe_log(job_id, "error", f"Execution failed: {exc}")
                 logger.warning("Job %s (%s) failed: %s", job_id, job["name"], exc)
                 await self.client.fail_job(job_id, str(exc), traceback.format_exc())
             finally:
                 self.active_jobs -= 1
+
+    async def _safe_log(self, job_id: str, level: str, message: str) -> None:
+        # Logging is best-effort: a log line failing to write should never fail the job itself.
+        try:
+            await self.client.log(job_id, level, message)
+        except Exception:
+            logger.debug("Failed to write log line for job %s", job_id, exc_info=True)
 
 
 def main() -> None:

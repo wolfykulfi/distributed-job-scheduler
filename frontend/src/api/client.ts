@@ -12,6 +12,7 @@ import type {
   Queue,
   QueueStats,
   ScheduledJob,
+  Throughput,
   User,
   Worker,
 } from './types'
@@ -70,6 +71,12 @@ export const queues = {
   pause: (queueId: string) => api.post<Queue>(`/api/v1/queues/${queueId}/pause`).then((r) => r.data),
   resume: (queueId: string) => api.post<Queue>(`/api/v1/queues/${queueId}/resume`).then((r) => r.data),
   stats: (queueId: string) => api.get<QueueStats>(`/api/v1/queues/${queueId}/stats`).then((r) => r.data),
+  throughput: (queueId: string, windowMinutes = 60, bucketMinutes = 5) =>
+    api
+      .get<Throughput>(`/api/v1/queues/${queueId}/throughput`, {
+        params: { window_minutes: windowMinutes, bucket_minutes: bucketMinutes },
+      })
+      .then((r) => r.data),
 }
 
 export const jobs = {

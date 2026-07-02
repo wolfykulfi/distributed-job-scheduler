@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +11,8 @@ from app.models.organization import OrgRole
 from app.models.queue import Queue
 from app.models.retry_policy import RetryPolicy
 from app.models.user import User
-from app.schemas.queue import QueueCreate, QueueResponse, QueueStats, QueueUpdate
+from app.schemas.queue import QueueCreate, QueueResponse, QueueStats, QueueUpdate, ThroughputResponse
+from app.services.throughput_service import get_throughput
 
 router = APIRouter(tags=["queues"])
 
@@ -111,3 +112,16 @@ async def queue_stats(
     for status, count in rows.all():
         counts[status.value] = count
     return QueueStats(**counts)
+
+
+@router.get("/api/v1/queues/{queue_id}/throughput", response_model=ThroughputResponse)
+async def queue_throughput(
+    queue_id: uuid.UUID,
+    window_minutes: int = Query(default=60, ge=5, le=1440),
+    bucket_minutes: int = Query(default=5, ge=1, le=60),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ThroughputResponse:
+    await require_queue_role(queue_id, OrgRole.MEMBER, db, user)
+    result = await get_throughput(db, queue_id, window_minutes, bucket_minutes)
+    return ThroughputResponse(**result)

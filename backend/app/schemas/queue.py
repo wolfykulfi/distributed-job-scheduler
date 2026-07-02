@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -58,3 +59,17 @@ class QueueStats(BaseModel):
     failed: int
     dead_letter: int
     cancelled: int
+
+
+class ThroughputBucket(BaseModel):
+    bucket_start: datetime
+    completed: int
+    failed: int
+
+
+class ThroughputResponse(BaseModel):
+    buckets: list[ThroughputBucket]
+    total_completed: int
+    total_failed: int
+    error_rate: float
+    health: str

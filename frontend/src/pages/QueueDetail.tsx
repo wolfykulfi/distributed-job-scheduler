@@ -4,6 +4,7 @@ import { deadLetter, jobs, queues, scheduledJobs } from '../api/client'
 import { usePolling } from '../hooks/usePolling'
 import { useJobEvents } from '../hooks/useJobEvents'
 import StatusBadge from '../components/StatusBadge'
+import ThroughputChart from '../components/ThroughputChart'
 import Button from '../components/ui/Button'
 import { Input, Select } from '../components/ui/Input'
 import SectionLabel from '../components/ui/SectionLabel'
@@ -34,6 +35,7 @@ export default function QueueDetail() {
 
   const { data: queue } = usePolling(() => queues.get(queueId!), 5000, [queueId, tick])
   const { data: stats } = usePolling(() => queues.stats(queueId!), 3000, [queueId, tick])
+  const { data: throughput } = usePolling(() => queues.throughput(queueId!), 10000, [queueId, tick])
   const { data: jobPage } = usePolling(
     () => jobs.list(queueId!, { status: statusFilter || undefined, limit, offset }),
     3000,
@@ -125,6 +127,8 @@ export default function QueueDetail() {
           ))}
         </div>
       )}
+
+      <ThroughputChart data={throughput ?? null} />
 
       <div className="flex gap-6 border-b-2 border-black">
         {(['jobs', 'scheduled', 'dead-letter'] as Tab[]).map((t) => (

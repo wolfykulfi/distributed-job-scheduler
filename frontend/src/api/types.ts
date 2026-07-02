@@ -46,6 +46,20 @@ export interface QueueStats {
   cancelled: number
 }
 
+export interface ThroughputBucket {
+  bucket_start: string
+  completed: number
+  failed: number
+}
+
+export interface Throughput {
+  buckets: ThroughputBucket[]
+  total_completed: number
+  total_failed: number
+  error_rate: number
+  health: 'idle' | 'healthy' | 'degraded' | 'unhealthy'
+}
+
 export interface Job {
   id: string
   queue_id: string
