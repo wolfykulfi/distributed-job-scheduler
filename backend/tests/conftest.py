@@ -1,3 +1,5 @@
+import os
+
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -6,7 +8,11 @@ from app import models  # noqa: F401 -- registers all tables on Base.metadata
 from app.database import Base, get_db
 from app.main import app
 
-TEST_DATABASE_URL = "postgresql+asyncpg://postgres@localhost:5433/scheduler_test"
+# Matches the credentials/port in .env.example and docker-compose.yml by default -- override with
+# TEST_DATABASE_URL if your local Postgres uses different credentials or a non-standard port.
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql+asyncpg://scheduler:scheduler@localhost:5432/scheduler_test"
+)
 
 
 @pytest_asyncio.fixture
