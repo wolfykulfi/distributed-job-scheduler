@@ -7,6 +7,7 @@ import signal
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.scheduler.scheduler_loop import fire_due_scheduled_jobs
+from app.services.lock_service import try_advisory_lock
 
 logger = logging.getLogger("scheduler")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -25,9 +26,15 @@ async def main() -> None:
     while not stop.is_set():
         async with AsyncSessionLocal() as db:
             try:
-                fired = await fire_due_scheduled_jobs(db)
-                if fired:
-                    logger.info("Fired %d recurring job instance(s)", fired)
+                # Coarse-grained lock, on top of the row-level FOR UPDATE SKIP LOCKED inside
+                # fire_due_scheduled_jobs: if you scale scheduler to >1 replica for HA, only one
+                # of them does the firing pass per tick instead of every replica racing on the
+                # same query each second.
+                async with try_advisory_lock(db, "scheduler_firing_pass") as acquired:
+                    if acquired:
+                        fired = await fire_due_scheduled_jobs(db)
+                        if fired:
+                            logger.info("Fired %d recurring job instance(s)", fired)
             except Exception:
                 logger.exception("Error while firing scheduled jobs")
         try:

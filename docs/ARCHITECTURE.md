@@ -42,7 +42,7 @@ flowchart TB
 | **Worker** (`app/worker/run_worker.py`) | One process per machine/container, N of them | **REST API only**, never touches Postgres directly | Treated as an external, less-trusted fleet — see rationale below |
 | **Scheduler** (`app/scheduler/run_scheduler.py`) | Single logical loop (safe to run >1 replica) | Direct DB access, same trust boundary as the API server | First-party control-plane component, not user-supplied code |
 | **PostgreSQL** | Single instance (or managed HA cluster in production) | — | Source of truth; `SELECT ... FOR UPDATE SKIP LOCKED` is what makes atomic claiming work |
-| **React dashboard** | Static SPA, polls the REST API | — | Read-mostly UI; polling every 3-5s is simpler than WebSockets and sufficient for a monitoring dashboard |
+| **React dashboard** | Static SPA, polls the REST API + one WebSocket per open queue page | — | Polling (3-5s) is the baseline correctness guarantee; the WebSocket is a latency optimization layered on top — see below |
 
 ## Why workers talk to the API instead of the database directly
 
@@ -117,6 +117,98 @@ stateDiagram-v2
    (e.g. "don't charge a card twice") is the handler's responsibility — the scheduler guarantees
    *at-least-once delivery with no duplicate concurrent claims*, which is the strongest guarantee
    a general-purpose scheduler can make without knowing what a job actually does.
+
+## Bonus features
+
+Five of the assignment's listed bonus items are implemented. RBAC is covered in
+[`DESIGN_DECISIONS.md`](DESIGN_DECISIONS.md#auth-model-full-org-rbac-not-a-flat-user-owns-projects-model);
+the other four:
+
+### Distributed locking
+
+A general-purpose primitive on top of Postgres advisory locks
+([`lock_service.py`](../backend/app/services/lock_service.py)), separate from (and
+complementary to) the row-level `FOR UPDATE SKIP LOCKED` used for job claiming. It's applied to
+the scheduler's cron-firing pass: if you run more than one scheduler replica for HA, only one
+of them actually does the firing work per tick instead of every replica racing the same query
+every second. Correctness didn't depend on this (`FOR UPDATE SKIP LOCKED` inside
+`fire_due_scheduled_jobs` already prevents double-firing at the row level) — this is a
+throughput optimization that also demonstrates the primitive is real and reusable, not a toy.
+`try_advisory_lock(db, name)` hashes the name to a lock key and yields whether it was acquired;
+non-blocking (`pg_try_advisory_lock`), so a replica that doesn't get the lock just skips its
+turn rather than queueing up.
+
+### Workflow dependencies
+
+Jobs can declare `depends_on: [job_id, ...]` at creation time. A `JobDependency` edge table
+records `job_id → depends_on_job_id`; the claim query
+([`claim_service.py`](../backend/app/services/claim_service.py)) excludes any job with an
+incomplete dependency via a correlated `NOT EXISTS` subquery run inside the same
+`FOR UPDATE SKIP LOCKED` claim statement:
+```sql
+WHERE ... AND NOT EXISTS (
+    SELECT 1 FROM job_dependencies jd JOIN jobs dep ON dep.id = jd.depends_on_job_id
+    WHERE jd.job_id = jobs.id AND dep.status != 'completed'
+)
+```
+No new `Job.status` value was needed — a dependent job just sits as `queued` until its
+dependencies clear, which composes for free with retries/rescheduling. `GET
+/jobs/{id}/dependencies` reports each dependency's live status for the dashboard.
+
+### WebSocket live updates
+
+Built on Postgres `LISTEN`/`NOTIFY` rather than a separate broker (Redis pub/sub, etc.) — one
+less moving part, and Postgres already guarantees the right delivery semantics for free:
+
+```mermaid
+sequenceDiagram
+    participant Client as Worker/API caller
+    participant API as API server (in a DB transaction)
+    participant PG as Postgres
+    participant WS as WebSocket handler (dedicated LISTEN connection)
+    participant Browser
+
+    Client->>API: e.g. POST /jobs/{id}/complete
+    API->>PG: UPDATE jobs SET status=... ; SELECT pg_notify('job_events', payload)
+    API->>PG: COMMIT
+    Note over PG: NOTIFY is only delivered on commit -- a listener never<br/>sees an event for a change that gets rolled back
+    PG-->>WS: async notification (job_events channel)
+    WS->>WS: filter: does payload.queue_id match this connection's queue?
+    WS-->>Browser: forward matching event over the socket
+    Browser->>Browser: bump refetch counter -> instant UI update
+```
+
+Every job state transition (create, claim, start, complete, fail→retry, fail→dead-letter,
+cancel, DLQ retry) calls `notify_job_event()`
+([`notify_service.py`](../backend/app/services/notify_service.py)) **inside the same
+transaction**, before the commit that makes the change durable — this is what gives exactly the
+right semantics without any extra coordination.
+
+The WebSocket endpoint (`/api/v1/ws/queues/{queue_id}`, in
+[`ws.py`](../backend/app/api/routes/ws.py)) opens a **dedicated raw asyncpg connection** per
+browser tab, separate from the normal SQLAlchemy pool -- `LISTEN` requires a long-lived
+connection subscribed for that one client, which a pooled/recycled connection can't provide.
+Auth is via `?token=<jwt>` (browsers can't set custom WebSocket headers), validated with the
+same RBAC check as the REST API before the socket is accepted.
+
+Deliberately **layered on top of polling, not a replacement for it**
+([`useJobEvents.ts`](../frontend/src/hooks/useJobEvents.ts)): if the socket never connects or
+drops, the dashboard's existing polling still keeps it correct, just on a 3-5s delay instead of
+instant. Currently wired into the queue detail page only (stats, job table, dead letter,
+recurring tabs) — the single-job detail page and project/queue list pages still rely on
+polling alone.
+
+### AI-generated failure summaries
+
+`POST /jobs/{id}/executions/{execution_id}/ai-summary`
+([`ai_summary_service.py`](../backend/app/services/ai_summary_service.py)) sends a failed
+execution's error message and (truncated) stack trace to Groq's OpenAI-compatible chat
+completions API and returns a 1-2 sentence plain-English diagnosis. The result is cached on
+`JobExecution.ai_summary` on first request — computed lazily, not eagerly on every failure,
+since most failed executions are never actually inspected by a human and calling an LLM
+synchronously in the failure path would be pure waste for the common case. Entirely optional:
+with no `GROQ_API_KEY` configured, the endpoint returns a clean `503`
+(`ai_summary_unavailable`) rather than the app failing to start or degrading elsewhere.
 
 ## Deployment topology
 

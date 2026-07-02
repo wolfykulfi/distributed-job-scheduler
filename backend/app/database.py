@@ -18,3 +18,9 @@ class Base(DeclarativeBase):
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+def raw_asyncpg_dsn() -> str:
+    """LISTEN/NOTIFY needs a dedicated asyncpg connection outside the SQLAlchemy pool --
+    asyncpg.connect() wants a plain `postgresql://` DSN, not SQLAlchemy's `+asyncpg` dialect URL."""
+    return settings.database_url.replace("postgresql+asyncpg://", "postgresql://", 1)

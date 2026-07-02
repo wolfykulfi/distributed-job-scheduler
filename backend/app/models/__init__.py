@@ -1,5 +1,6 @@
 from app.models.dead_letter import DeadLetterJob
 from app.models.job import Batch, Job
+from app.models.job_dependency import JobDependency
 from app.models.job_execution import JobExecution
 from app.models.job_log import JobLog
 from app.models.organization import Organization, OrganizationMember
@@ -22,6 +23,7 @@ __all__ = [
     "RetryPolicy",
     "Job",
     "Batch",
+    "JobDependency",
     "JobExecution",
     "JobLog",
     "ScheduledJob",

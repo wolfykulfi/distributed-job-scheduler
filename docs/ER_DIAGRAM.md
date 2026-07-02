@@ -18,6 +18,7 @@ erDiagram
     JOB }o--o| WORKER : "claimed by"
     JOB ||--o{ JOB_EXECUTION : "attempts"
     JOB ||--o| DEAD_LETTER_JOB : "moved to"
+    JOB ||--o{ JOB_DEPENDENCY : "requires"
     JOB_EXECUTION ||--o{ JOB_LOG : "logs"
     JOB_EXECUTION }o--o| WORKER : "executed by"
     WORKER ||--o{ WORKER_HEARTBEAT : "pings"
@@ -123,6 +124,12 @@ erDiagram
         text error_message
         text error_stacktrace
         jsonb result
+        text ai_summary "cached Groq failure summary, nullable"
+    }
+    JOB_DEPENDENCY {
+        uuid id PK
+        uuid job_id FK "cannot be claimed until..."
+        uuid depends_on_job_id FK "...this job reaches 'completed'"
     }
     JOB_LOG {
         uuid id PK
@@ -187,3 +194,17 @@ so full retry history survives independent of the job's current state, and so pe
 metrics (duration, error) can be queried/aggregated directly. `RetryPolicy` is its own table
 (not columns inlined on `Queue`/`Job`) so a policy can be defined once and reused, and so a
 `Job` can override its queue's default policy without duplicating the strategy fields.
+
+**`JobDependency` (workflow dependencies, bonus feature).** A plain edge table
+(`job_id → depends_on_job_id`) rather than a new `Job.status` value like `blocked` — the claim
+query excludes a job with any unmet dependency via a correlated `NOT EXISTS` subquery, so
+"waiting on a dependency" composes for free with the existing status machine (a dependent job
+is simply `queued` the whole time, just not yet eligible). Both FKs cascade on delete, and a
+`CHECK (job_id != depends_on_job_id)` constraint blocks self-dependencies at the DB level.
+Cascade delete is correct here specifically because an edge is meaningless without both
+endpoints — unlike `Job.claimed_by`/`created_by`, which `SET NULL` instead (see above).
+
+**`JobExecution.ai_summary` (AI failure summaries, bonus feature).** Nullable `TEXT`, computed
+lazily and cached on first request rather than eagerly on every failure — most failed
+executions are never actually inspected by a human, so calling an LLM synchronously in the
+failure path would be pure waste. See [`DESIGN_DECISIONS.md`](DESIGN_DECISIONS.md).

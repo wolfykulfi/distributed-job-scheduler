@@ -8,6 +8,7 @@ from app.models.job_execution import ExecutionStatus, JobExecution
 from app.models.queue import Queue
 from app.models.retry_policy import RetryPolicy, RetryStrategy
 from app.models.worker import Worker
+from app.services.notify_service import notify_job_event
 from app.services.retry_service import compute_backoff_seconds
 
 # Applied when neither the job nor its queue defines a retry policy.
@@ -41,6 +42,7 @@ async def start_job(db: AsyncSession, job: Job, worker: Worker) -> JobExecution:
         status=ExecutionStatus.RUNNING, started_at=now,
     )
     db.add(execution)
+    await notify_job_event(db, job.queue_id, job.id, JobStatus.RUNNING.value)
     await db.commit()
     await db.refresh(execution)
     return execution
@@ -55,6 +57,7 @@ async def complete_job(db: AsyncSession, job: Job, execution: JobExecution, resu
     execution.finished_at = now
     execution.duration_ms = int((now - execution.started_at).total_seconds() * 1000)
     execution.result = result
+    await notify_job_event(db, job.queue_id, job.id, JobStatus.COMPLETED.value)
     await db.commit()
 
 
@@ -88,4 +91,5 @@ async def fail_job(
             )
         )
 
+    await notify_job_event(db, job.queue_id, job.id, job.status.value)
     await db.commit()

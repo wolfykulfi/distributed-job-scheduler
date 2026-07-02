@@ -37,6 +37,8 @@ class JobExecution(UUIDPKMixin, TimestampMixin, Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_stacktrace: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Cached on first request so repeat views don't re-call the LLM; see ai_summary_service.py.
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     job: Mapped["Job"] = relationship(back_populates="executions")
     logs: Mapped[list["JobLog"]] = relationship(back_populates="execution", cascade="all, delete-orphan")

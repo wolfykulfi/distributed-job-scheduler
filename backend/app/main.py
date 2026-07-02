@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from app.api.routes import auth, dead_letter, jobs, organizations, projects, queues, scheduled_jobs, workers
+from app.api.routes import auth, dead_letter, jobs, organizations, projects, queues, scheduled_jobs, workers, ws
 from app.config import settings
 from app.core.exceptions import AppError
 
@@ -58,3 +58,4 @@ app.include_router(jobs.router)
 app.include_router(scheduled_jobs.router)
 app.include_router(dead_letter.router)
 app.include_router(workers.router)
+app.include_router(ws.router)

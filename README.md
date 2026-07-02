@@ -5,6 +5,11 @@ A production-inspired distributed job scheduling platform: queues, five job-crea
 executes them concurrently, retries with configurable backoff, a dead letter queue, and a
 dashboard to watch it all happen.
 
+Also implements five of the assignment's bonus features: **role-based access control**,
+**distributed locking**, **workflow dependencies** (jobs waiting on other jobs), **WebSocket
+live updates**, and **AI-generated failure summaries** (via Groq) — see
+[Bonus features](#bonus-features) below.
+
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the system design,
 [`docs/ER_DIAGRAM.md`](docs/ER_DIAGRAM.md) for the schema,
 [`docs/API.md`](docs/API.md) for endpoint reference, and
@@ -53,6 +58,19 @@ all, and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full request flo
 > properly by adding a `/healthz`-based healthcheck to `api` and gating `scheduler`/`frontend`/
 > `worker` on it).
 
+## Bonus features
+
+| Feature | Where | Notes |
+|---|---|---|
+| Role-based access control | `owner`/`admin`/`member` roles, enforced in [`core/deps.py`](backend/app/core/deps.py) | Built into the core auth model from the start, not bolted on |
+| Distributed locking | [`lock_service.py`](backend/app/services/lock_service.py) | Postgres advisory locks; used to make the scheduler's cron-firing pass safe to run on >1 replica |
+| Workflow dependencies | `depends_on` on job creation, [`claim_service.py`](backend/app/services/claim_service.py) | A job with an incomplete dependency is never claimed — see `GET /jobs/{id}/dependencies` |
+| WebSocket live updates | [`ws.py`](backend/app/api/routes/ws.py), [`useJobEvents.ts`](frontend/src/hooks/useJobEvents.ts) | Postgres `LISTEN`/`NOTIFY`, layered on top of (not replacing) polling — wired into the queue detail page |
+| AI failure summaries | [`ai_summary_service.py`](backend/app/services/ai_summary_service.py) | Groq API, cached per execution; needs `GROQ_API_KEY` in `backend/.env` (optional — the endpoint just returns 503 without it) |
+
+Full rationale for each in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#bonus-features) and
+[`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md#bonus-features-implemented-after-the-initial-build).
+
 ## Local development (without Docker)
 
 Requires Python 3.12+, Node 20+, and a running PostgreSQL instance.
@@ -97,22 +115,25 @@ createdb scheduler_test   # or: psql -c "CREATE DATABASE scheduler_test"
 pytest tests/ -v
 ```
 
-25 tests covering auth, RBAC boundaries, all 5 job creation modes, pagination/idempotency, the
+33 tests covering auth, RBAC boundaries, all 5 job creation modes, pagination/idempotency, the
 full worker lifecycle (start → complete / fail → retry-with-backoff → dead letter → retry),
-queue concurrency limits, pause/resume, and — the one that matters most for a scheduler —
-concurrent workers racing for the same jobs never double-claim
-(`tests/test_claim_concurrency.py`).
+queue concurrency limits, pause/resume, workflow dependencies (a job with an unmet dependency is
+never claimed), distributed locking (two sessions can't hold the same advisory lock), AI summary
+error paths, and — the one that matters most for a scheduler — concurrent workers racing for the
+same jobs never double-claim (`tests/test_claim_concurrency.py`).
 
 ## Project structure
 
 ```
 backend/
   app/
-    api/routes/       REST endpoints (auth, projects, queues, jobs, workers, scheduled-jobs, dead-letter)
+    api/routes/       REST endpoints (auth, projects, queues, jobs, workers, scheduled-jobs, dead-letter, ws)
     core/              security (JWT/API keys), auth dependencies, structured exceptions
-    models/            SQLAlchemy ORM models (one file per entity)
+    models/            SQLAlchemy ORM models (one file per entity, incl. job_dependency.py)
     schemas/           Pydantic request/response models
-    services/          business logic: atomic claim, retry backoff, job lifecycle transitions
+    services/          business logic: atomic claim, retry backoff, job lifecycle transitions,
+                        lock_service.py (advisory locks), notify_service.py (LISTEN/NOTIFY),
+                        ai_summary_service.py (Groq)
     worker/            standalone worker process (run_worker.py) + demo handler registry
     scheduler/         standalone scheduler process (run_scheduler.py): fires due cron jobs
   alembic/             DB migrations
@@ -122,7 +143,7 @@ frontend/
     api/               typed API client
     pages/             Login, Projects, ProjectDetail, QueueDetail, JobDetail
     components/ui/     shared design-system primitives (Button, Input, Panel, SectionLabel)
-    hooks/usePolling.ts
+    hooks/             usePolling.ts, useJobEvents.ts (WebSocket live updates)
 docs/                  architecture, ER diagram, API reference, design decisions
 docker-compose.yml
 ```

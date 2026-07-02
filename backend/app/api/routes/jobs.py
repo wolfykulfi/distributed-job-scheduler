@@ -6,23 +6,28 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, require_queue_role
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.database import get_db
 from app.models.job import Batch, Job, JobStatus, JobType
-from app.models.job_execution import JobExecution
+from app.models.job_dependency import JobDependency
+from app.models.job_execution import ExecutionStatus, JobExecution
 from app.models.job_log import JobLog
 from app.models.organization import OrgRole
 from app.models.retry_policy import RetryPolicy
 from app.models.user import User
 from app.schemas.common import Page
 from app.schemas.job import (
+    AiSummaryResponse,
     BatchJobCreate,
     BatchResponse,
     JobCreate,
+    JobDependencyResponse,
     JobExecutionResponse,
     JobLogResponse,
     JobResponse,
 )
+from app.services.ai_summary_service import summarize_failure
+from app.services.notify_service import notify_job_event
 
 router = APIRouter(tags=["jobs"])
 
@@ -63,6 +68,16 @@ async def create_job(
     else:  # scheduled
         job_type, status, scheduled_for = JobType.SCHEDULED, JobStatus.SCHEDULED, body.scheduled_for
 
+    if body.depends_on:
+        found = set(
+            await db.scalars(select(Job.id).where(Job.queue_id == queue_id, Job.id.in_(body.depends_on)))
+        )
+        missing = set(body.depends_on) - found
+        if missing:
+            raise ValidationAppError(
+                f"depends_on job(s) not found in this queue: {', '.join(str(m) for m in missing)}"
+            )
+
     job = Job(
         queue_id=queue_id,
         name=body.name,
@@ -76,6 +91,12 @@ async def create_job(
         created_by=user.id,
     )
     db.add(job)
+    await db.flush()  # assign job.id before inserting dependency edges
+
+    for dep_id in body.depends_on:
+        db.add(JobDependency(job_id=job.id, depends_on_job_id=dep_id))
+
+    await notify_job_event(db, queue_id, job.id, job.status.value)
     await db.commit()
     await db.refresh(job)
     return job
@@ -155,6 +176,20 @@ async def get_job(job_id: uuid.UUID, user: User = Depends(get_current_user), db:
     return job
 
 
+@router.get("/api/v1/jobs/{job_id}/dependencies", response_model=list[JobDependencyResponse])
+async def get_job_dependencies(
+    job_id: uuid.UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+) -> list[JobDependencyResponse]:
+    job = await _get_job_or_404(db, job_id)
+    await require_queue_role(job.queue_id, OrgRole.MEMBER, db, user)
+    rows = await db.execute(
+        select(Job.id, Job.name, Job.status)
+        .join(JobDependency, JobDependency.depends_on_job_id == Job.id)
+        .where(JobDependency.job_id == job_id)
+    )
+    return [JobDependencyResponse(job_id=r.id, name=r.name, status=r.status.value) for r in rows]
+
+
 @router.get("/api/v1/jobs/{job_id}/executions", response_model=list[JobExecutionResponse])
 async def get_job_executions(
     job_id: uuid.UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
@@ -165,6 +200,31 @@ async def get_job_executions(
         select(JobExecution).where(JobExecution.job_id == job_id).order_by(JobExecution.attempt_number)
     )
     return list(result)
+
+
+@router.post("/api/v1/jobs/{job_id}/executions/{execution_id}/ai-summary", response_model=AiSummaryResponse)
+async def get_ai_failure_summary(
+    job_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AiSummaryResponse:
+    job = await _get_job_or_404(db, job_id)
+    await require_queue_role(job.queue_id, OrgRole.MEMBER, db, user)
+
+    execution = await db.get(JobExecution, execution_id)
+    if execution is None or execution.job_id != job_id:
+        raise NotFoundError("Execution not found")
+    if execution.status != ExecutionStatus.FAILED:
+        raise ConflictError("AI summaries are only available for failed executions")
+
+    if execution.ai_summary is None:
+        execution.ai_summary = await summarize_failure(
+            job.name, execution.error_message or "(no error message)", execution.error_stacktrace
+        )
+        await db.commit()
+
+    return AiSummaryResponse(summary=execution.ai_summary)
 
 
 @router.get("/api/v1/jobs/{job_id}/logs", response_model=list[JobLogResponse])
@@ -191,6 +251,7 @@ async def cancel_job(
     if job.status not in (JobStatus.QUEUED, JobStatus.SCHEDULED):
         raise ConflictError(f"Cannot cancel a job in status '{job.status.value}'")
     job.status = JobStatus.CANCELLED
+    await notify_job_event(db, job.queue_id, job.id, JobStatus.CANCELLED.value)
     await db.commit()
     await db.refresh(job)
     return job

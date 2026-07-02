@@ -48,11 +48,13 @@ with the HTTP status matching the error (`404` not_found, `409` conflict, `401` 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/api/v1/queues/{queue_id}/jobs` | user, `MEMBER`+ | Create an `immediate` \| `delayed` \| `scheduled` job. `delay_seconds` required for `delayed`, `scheduled_for` required for `scheduled`. Optional `idempotency_key` (409 on duplicate active key) and per-job `retry_policy` override. |
+| POST | `/api/v1/queues/{queue_id}/jobs` | user, `MEMBER`+ | Create an `immediate` \| `delayed` \| `scheduled` job. `delay_seconds` required for `delayed`, `scheduled_for` required for `scheduled`. Optional `idempotency_key` (409 on duplicate active key), per-job `retry_policy` override, and `depends_on: [job_id, ...]` — job IDs in the same queue that must reach `completed` before this one is claimable (422 if any ID doesn't exist in the queue). |
 | POST | `/api/v1/queues/{queue_id}/jobs/batch` | user, `MEMBER`+ | Bulk-create N jobs sharing one handler `name` and retry policy, grouped under a `Batch`. |
 | GET | `/api/v1/queues/{queue_id}/jobs` | user, `MEMBER`+ | Paginated (`limit`/`offset`), filterable by `status` and `job_type`. |
 | GET | `/api/v1/jobs/{job_id}` | user, `MEMBER`+ | Job detail. |
+| GET | `/api/v1/jobs/{job_id}/dependencies` | user, `MEMBER`+ | This job's `depends_on` edges, each with the dependency's live `name`/`status`. |
 | GET | `/api/v1/jobs/{job_id}/executions` | user, `MEMBER`+ | Full attempt history. |
+| POST | `/api/v1/jobs/{job_id}/executions/{execution_id}/ai-summary` | user, `MEMBER`+ | Only valid for a `failed` execution. Returns `{summary}` — a Groq-generated plain-English diagnosis, cached on first call. `503 ai_summary_unavailable` if no `GROQ_API_KEY` is configured or the Groq call fails. |
 | GET | `/api/v1/jobs/{job_id}/logs` | user, `MEMBER`+ | Log lines across all attempts. |
 | POST | `/api/v1/jobs/{job_id}/cancel` | user, `ADMIN`+ | Only valid from `queued`/`scheduled`. |
 
@@ -91,3 +93,9 @@ with the HTTP status matching the error (`404` not_found, `409` conflict, `401` 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/v1/projects/{project_id}/workers` | user, `MEMBER`+ | List workers registered to a project, with live status/heartbeat. |
+
+## Live updates (WebSocket)
+
+| Path | Auth | Description |
+|---|---|---|
+| `WS /api/v1/ws/queues/{queue_id}` | user JWT as `?token=` query param (not a header — browsers can't set one on the WebSocket handshake) | Pushes `{queue_id, job_id, status}` for every state change on jobs in this queue, sourced from Postgres `LISTEN`/`NOTIFY`. Purely a latency optimization: the dashboard's polling already keeps it correct if this never connects or drops. See [`ARCHITECTURE.md`](ARCHITECTURE.md#websocket-live-updates) for the full flow. |

@@ -13,6 +13,7 @@ from app.models.job import Job, JobStatus
 from app.models.organization import OrgRole
 from app.models.user import User
 from app.schemas.job import DeadLetterResponse, JobResponse
+from app.services.notify_service import notify_job_event
 
 router = APIRouter(tags=["dead-letter"])
 
@@ -56,6 +57,7 @@ async def retry_dead_letter_job(
     dlq_entry.resolved_at = datetime.now(timezone.utc)
     dlq_entry.resolved_by = user.id
 
+    await notify_job_event(db, job.queue_id, job.id, JobStatus.QUEUED.value)
     await db.commit()
     await db.refresh(job)
     return job

@@ -7,11 +7,12 @@ handling (workers can poll at high frequency without blocking threads), Pydantic
 baked into the framework, and Postgres's `SELECT ... FOR UPDATE SKIP LOCKED` being the right
 primitive for atomic job claiming without an extra broker (Redis/RabbitMQ) in the loop.
 
-**React + Vite + TypeScript + Tailwind**, polling-based live updates rather than WebSockets.
-The assignment explicitly allows either; polling every 3-5s is simpler to reason about, requires
-no connection-management code, and is indistinguishable from push for a human staring at a
-dashboard. WebSockets are listed as a bonus and were cut given the time budget — see
-[Scope cuts](#scope-cuts-given-the-time-budget) below.
+**React + Vite + TypeScript + Tailwind**, polling as the baseline live-update mechanism, with a
+WebSocket layered on top (added later as a bonus feature — see
+[`ARCHITECTURE.md`](ARCHITECTURE.md#websocket-live-updates)). Polling every 3-5s alone is
+simpler to reason about and indistinguishable from push for a human staring at a dashboard, so
+it stays as the correctness guarantee even now that the socket exists: if the socket never
+connects or drops, the page is still correct, just slower.
 
 ## Worker trust boundary: REST + API keys, not direct DB access
 
@@ -106,17 +107,42 @@ multiple registered workers, not a direct unit-test call into `claim_service`, s
 exercising the thing that matters: whether concurrent *requests* can race each other into a
 double-claim.
 
+## Bonus features implemented after the initial build
+
+Added in a second pass, once the core (graded ~75%: architecture/DB/backend/reliability) was
+already correct and tested: **workflow dependencies**, **distributed locking**, **WebSocket live
+updates**, and **AI-generated failure summaries** (Groq). Design rationale for each lives in
+[`ARCHITECTURE.md`](ARCHITECTURE.md#bonus-features) since it's more naturally explained
+alongside the diagrams; this file only covers what's genuinely a *trade-off*:
+
+- **AI summaries are lazy, not eager.** Computed on first `GET .../ai-summary` request and
+  cached on `JobExecution.ai_summary`, not generated automatically the moment a job fails. Most
+  failures are never inspected by a human, so calling an LLM synchronously in the failure path
+  (which is already latency-sensitive — it blocks the worker reporting back) would be pure waste
+  for the common case. The cost of this choice: the *first* person to look at a given failure
+  waits a couple seconds for the summary; acceptable since it's a diagnostic aid, not something
+  on any critical path.
+- **Workflow dependencies don't add a new `Job.status`.** A job with unmet dependencies is still
+  just `queued` — the claim query's `NOT EXISTS` subquery is what actually gates it. Considered a
+  `blocked` status instead; rejected because it would mean *two* things could make a job
+  unclaimable (a status check and a dependency check) instead of one, and because "waiting on a
+  dependency" and "waiting to be picked up" aren't meaningfully different states from the
+  dashboard's perspective — a job is either claimable right now or it isn't, for whatever reason.
+- **The advisory lock is a throughput optimization, not a correctness fix.** `FOR UPDATE SKIP
+  LOCKED` inside `fire_due_scheduled_jobs` already made concurrent scheduler replicas safe before
+  the lock existed. The lock's actual job is avoiding N replicas all running the same "any cron
+  jobs due?" query every second when only one of them needs to.
+
 ## Scope cuts given the time budget
 
-Explicitly **not implemented**, in order of how much they were considered:
-- **Workflow dependencies** (job B waits on job A) — would need a `job_dependencies` join table
-  and a "dependencies satisfied" check in the claim query; straightforward extension, cut for time.
-- **WebSocket live updates** — polling covers the same user-visible outcome for this use case.
-- **Rate limiting, distributed locking (beyond job claiming), queue sharding, event-driven
-  execution, AI failure summaries** — all listed bonus items, none load-bearing for the core
-  grading criteria (architecture/DB/backend/reliability), cut to protect time spent on getting
-  the core lifecycle correct and genuinely tested rather than broad-but-shallow.
-- **Org invite flow** — see above.
+Still **not implemented**, and lower priority than what's above given the grading weights:
+- **Rate limiting, queue sharding, event-driven execution (beyond the existing webhook-shaped job
+  creation), org invite flow** — see [Auth model](#auth-model-full-org-rbac-not-a-flat-user-owns-projects-model)
+  above for the org-invite gap specifically. None of these are load-bearing for the core grading
+  criteria (architecture/DB/backend/reliability).
+- **WebSocket coverage is partial** — wired into the queue detail page only. The single-job
+  detail page (execution history/logs) and the project/queue list pages still rely on polling
+  alone; extending the same pattern there is mechanical, not a design question.
 
 ## What would change for a larger production deployment
 
@@ -124,6 +150,7 @@ Explicitly **not implemented**, in order of how much they were considered:
   malformed payloads are caught at submission time, not first execution.
 - Partition `job_executions`/`job_logs` by time for long-running deployments (they're
   append-mostly and grow unbounded).
-- Add a leader-election lock around the scheduler loop instead of relying purely on
-  `FOR UPDATE SKIP LOCKED` for cron firing, to avoid redundant work with many scheduler replicas
-  (correctness is already guaranteed either way; this would be a throughput optimization).
+- The WebSocket handler opens one dedicated Postgres connection per connected browser tab
+  (necessary for `LISTEN`), which won't scale past a few hundred concurrent dashboard viewers
+  without moving to a shared pub/sub layer (e.g. one internal `LISTEN` connection per API
+  replica, fanning out to WebSocket clients in-process) instead of one per client.

@@ -3,6 +3,7 @@ import type {
   ApiKeyCreateResponse,
   DeadLetterEntry,
   Job,
+  JobDependency,
   JobExecution,
   JobLog,
   Organization,
@@ -84,12 +85,19 @@ export const jobs = {
       delay_seconds?: number
       scheduled_for?: string
       idempotency_key?: string
+      depends_on?: string[]
     },
   ) => api.post<Job>(`/api/v1/queues/${queueId}/jobs`, body).then((r) => r.data),
   get: (jobId: string) => api.get<Job>(`/api/v1/jobs/${jobId}`).then((r) => r.data),
   executions: (jobId: string) => api.get<JobExecution[]>(`/api/v1/jobs/${jobId}/executions`).then((r) => r.data),
   logs: (jobId: string) => api.get<JobLog[]>(`/api/v1/jobs/${jobId}/logs`).then((r) => r.data),
   cancel: (jobId: string) => api.post<Job>(`/api/v1/jobs/${jobId}/cancel`).then((r) => r.data),
+  dependencies: (jobId: string) =>
+    api.get<JobDependency[]>(`/api/v1/jobs/${jobId}/dependencies`).then((r) => r.data),
+  aiSummary: (jobId: string, executionId: string) =>
+    api
+      .post<{ summary: string }>(`/api/v1/jobs/${jobId}/executions/${executionId}/ai-summary`)
+      .then((r) => r.data),
 }
 
 export const scheduledJobs = {

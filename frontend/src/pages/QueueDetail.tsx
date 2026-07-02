@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { deadLetter, jobs, queues, scheduledJobs } from '../api/client'
 import { usePolling } from '../hooks/usePolling'
+import { useJobEvents } from '../hooks/useJobEvents'
 import StatusBadge from '../components/StatusBadge'
 import Button from '../components/ui/Button'
 import { Input, Select } from '../components/ui/Input'
@@ -24,6 +25,7 @@ export default function QueueDetail() {
   const [jobPayload, setJobPayload] = useState('{}')
   const [delaySeconds, setDelaySeconds] = useState(30)
   const [scheduledFor, setScheduledFor] = useState('')
+  const [dependsOn, setDependsOn] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const [cronName, setCronName] = useState('log_message')
@@ -39,6 +41,14 @@ export default function QueueDetail() {
   )
   const { data: cronJobs } = usePolling(() => scheduledJobs.list(queueId!), 5000, [queueId, tick, tab])
   const { data: dlq } = usePolling(() => deadLetter.list(queueId!, false), 5000, [queueId, tick, tab])
+
+  // Push-based refresh on top of the polling above: a job state change (claim, complete, fail,
+  // etc.) bumps `tick` immediately instead of waiting for the next poll interval. If the socket
+  // never connects, polling alone still keeps this page correct.
+  useJobEvents(
+    queueId,
+    useCallback(() => setTick((t) => t + 1), []),
+  )
 
   const createJob = async () => {
     setFormError(null)
@@ -56,6 +66,10 @@ export default function QueueDetail() {
         payload,
         delay_seconds: jobType === 'delayed' ? delaySeconds : undefined,
         scheduled_for: jobType === 'scheduled' ? new Date(scheduledFor).toISOString() : undefined,
+        depends_on: dependsOn
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
       })
       setTick((t) => t + 1)
     } catch (err) {
@@ -153,6 +167,12 @@ export default function QueueDetail() {
                 placeholder='payload JSON, e.g. {"text":"hi"}'
                 value={jobPayload}
                 onChange={(e) => setJobPayload(e.target.value)}
+                className="col-span-2 md:col-span-1"
+              />
+              <Input
+                placeholder="depends on (job IDs, comma-separated)"
+                value={dependsOn}
+                onChange={(e) => setDependsOn(e.target.value)}
                 className="col-span-2 md:col-span-1"
               />
             </div>

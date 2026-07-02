@@ -17,6 +17,9 @@ class JobCreate(BaseModel):
     delay_seconds: int | None = Field(default=None, ge=1, description="Required when job_type='delayed'")
     scheduled_for: datetime | None = Field(default=None, description="Required when job_type='scheduled'")
     retry_policy: RetryPolicyCreate | None = None
+    depends_on: list[uuid.UUID] = Field(
+        default_factory=list, description="Job IDs (same queue) that must reach 'completed' before this job is claimable"
+    )
 
     @model_validator(mode="after")
     def validate_type_fields(self) -> "JobCreate":
@@ -86,6 +89,16 @@ class JobResponse(ORMBase):
     created_at: datetime
 
 
+class JobDependencyResponse(BaseModel):
+    job_id: uuid.UUID
+    name: str
+    status: str
+
+
+class AiSummaryResponse(BaseModel):
+    summary: str
+
+
 class JobExecutionResponse(ORMBase):
     id: uuid.UUID
     attempt_number: int
@@ -94,6 +107,7 @@ class JobExecutionResponse(ORMBase):
     started_at: datetime
     finished_at: datetime | None
     duration_ms: int | None
+    ai_summary: str | None = None
     error_message: str | None
     result: dict | None
 

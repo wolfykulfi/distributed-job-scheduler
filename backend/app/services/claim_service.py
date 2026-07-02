@@ -11,10 +11,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.job import Job, JobStatus
+from app.models.job_dependency import JobDependency
 from app.models.queue import Queue
 from app.models.worker import Worker
+from app.services.notify_service import notify_job_event
 
 _ACTIVE_STATUSES = (JobStatus.CLAIMED, JobStatus.RUNNING)
 
@@ -49,6 +52,17 @@ async def claim_jobs_for_worker(db: AsyncSession, worker: Worker, max_jobs: int)
 
         take = min(available, remaining)
 
+        # A job with any dependency not yet 'completed' is not claimable -- correlated subquery,
+        # not a status field, so workflow deps compose cleanly with retries/rescheduling without
+        # a new job status.
+        dep_job = aliased(Job)
+        has_unmet_dependency = (
+            select(JobDependency.id)
+            .join(dep_job, dep_job.id == JobDependency.depends_on_job_id)
+            .where(JobDependency.job_id == Job.id, dep_job.status != JobStatus.COMPLETED)
+            .exists()
+        )
+
         # Eligible: QUEUED jobs, or SCHEDULED/FAILED-retry jobs whose wake time has arrived.
         candidate_stmt = (
             select(Job.id)
@@ -60,6 +74,7 @@ async def claim_jobs_for_worker(db: AsyncSession, worker: Worker, max_jobs: int)
                     & (Job.scheduled_for.is_(None) | (Job.scheduled_for <= now))
                     & (Job.next_retry_at.is_(None) | (Job.next_retry_at <= now))
                 ),
+                ~has_unmet_dependency,
             )
             .order_by(Job.priority.desc(), Job.created_at.asc())
             .limit(take)
@@ -74,6 +89,8 @@ async def claim_jobs_for_worker(db: AsyncSession, worker: Worker, max_jobs: int)
             .where(Job.id.in_(job_ids))
             .values(status=JobStatus.CLAIMED, claimed_by=worker.id, claimed_at=now)
         )
+        for job_id in job_ids:
+            await notify_job_event(db, queue.id, job_id, JobStatus.CLAIMED.value)
 
         rows = await db.scalars(select(Job).where(Job.id.in_(job_ids)))
         claimed.extend(rows)

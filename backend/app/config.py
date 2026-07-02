@@ -20,5 +20,9 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    # AI failure summaries (bonus feature) -- optional; the feature no-ops without a key.
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.1-8b-instant"
+
 
 settings = Settings()

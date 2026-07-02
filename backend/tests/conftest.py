@@ -15,11 +15,13 @@ async def db_engine():
     own event loop, and gives each test a clean schema without cross-test leakage."""
     engine = create_async_engine(TEST_DATABASE_URL, future=True)
     async with engine.begin() as conn:
+        # drop_all + create_all, not just row deletes -- this DB's tables must always match the
+        # *current* models, otherwise a schema change (new column/table) leaves this DB stale
+        # until someone thinks to drop it manually. Full drop/recreate is cheap at this table count.
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine
-    async with engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(table.delete())
+    await engine.dispose()
     await engine.dispose()
 
 

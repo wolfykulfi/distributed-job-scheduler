@@ -77,6 +77,13 @@ export interface JobExecution {
   duration_ms: number | null
   error_message: string | null
   result: Record<string, unknown> | null
+  ai_summary: string | null
+}
+
+export interface JobDependency {
+  job_id: string
+  name: string
+  status: string
 }
 
 export interface JobLog {
