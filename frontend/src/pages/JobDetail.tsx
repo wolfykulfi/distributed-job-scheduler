@@ -117,15 +117,18 @@ export default function JobDetail() {
                   {ex.status !== 'failed' ? (
                     '—'
                   ) : ex.ai_summary || summaries[ex.id] ? (
-                    <button
-                      className={`swiss-focusable text-left text-black/70 hover:text-black ${
-                        expandedSummaries[ex.id] ? '' : 'line-clamp-2'
-                      }`}
-                      onClick={() => setExpandedSummaries((prev) => ({ ...prev, [ex.id]: !prev[ex.id] }))}
-                      title={expandedSummaries[ex.id] ? 'Click to collapse' : 'Click to expand'}
-                    >
-                      {summaries[ex.id] ?? ex.ai_summary}
-                    </button>
+                    <div>
+                      <p className={`text-black/70 ${expandedSummaries[ex.id] ? '' : 'line-clamp-2'}`}>
+                        {summaries[ex.id] ?? ex.ai_summary}
+                      </p>
+                      <button
+                        className="swiss-focusable mt-1 flex items-center gap-1 text-[10px] font-bold tracking-widest text-swiss-accent uppercase hover:text-black"
+                        onClick={() => setExpandedSummaries((prev) => ({ ...prev, [ex.id]: !prev[ex.id] }))}
+                      >
+                        {expandedSummaries[ex.id] ? 'Show less' : 'Show more'}
+                        <span aria-hidden="true">{expandedSummaries[ex.id] ? '▲' : '▼'}</span>
+                      </button>
+                    </div>
                   ) : (
                     <button
                       className="swiss-focusable text-xs font-bold tracking-widest uppercase hover:text-swiss-accent disabled:opacity-40"
