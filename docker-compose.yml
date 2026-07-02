@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: scheduler
+      POSTGRES_DB: scheduler
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://scheduler:scheduler@postgres:5432/scheduler
+      JWT_SECRET: change-me-in-production
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    command: python -m app.worker.run_worker
+    profiles: ["workers"]  # not started by plain `docker compose up` -- needs an API key first
+    environment:
+      DATABASE_URL: postgresql+asyncpg://scheduler:scheduler@postgres:5432/scheduler
+      SCHEDULER_API_URL: http://api:8000
+      # Create a project + queue + API key via the dashboard first, then:
+      #   PROJECT_API_KEY=sk_live_... docker compose --profile workers up worker
+      PROJECT_API_KEY: ${PROJECT_API_KEY:-}
+      WORKER_CONCURRENCY: 4
+    depends_on:
+      api:
+        condition: service_started
+
+  scheduler:
+    build: ./backend
+    command: python -m app.scheduler.run_scheduler
+    environment:
+      DATABASE_URL: postgresql+asyncpg://scheduler:scheduler@postgres:5432/scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

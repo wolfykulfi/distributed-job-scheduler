@@ -1,0 +1,25 @@
+# Local Postgres used for dev/testing on this machine (no Docker available) -- not part of the deliverable
+.pgportable/
+.pgdata/
+pg_log.txt
+
+# Python
+backend/venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Env files (committed .env.example instead)
+.env
+!.env.example
+
+# Editor/OS
+.DS_Store
+
+# Local Claude Code tool-permission grants, machine-specific
+.claude/settings.local.json
