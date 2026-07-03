@@ -43,6 +43,7 @@ with the HTTP status matching the error (`404` not_found, `409` conflict, `401` 
 | PATCH | `/api/v1/queues/{queue_id}` | user, `ADMIN`+ | Update description/priority/max_concurrency. |
 | POST | `/api/v1/queues/{queue_id}/pause` \| `/resume` | user, `ADMIN`+ | Stop/resume workers claiming from this queue. |
 | GET | `/api/v1/queues/{queue_id}/stats` | user, `MEMBER`+ | Job counts grouped by status. |
+| GET | `/api/v1/queues/{queue_id}/throughput` | user, `MEMBER`+ | Time-bucketed completed/failed counts over a sliding window (`window_minutes`, default 60; `bucket_minutes`, default 5) plus an overall `error_rate` and a derived `health` (`idle` \| `healthy` \| `degraded` \| `unhealthy`). Powers the dashboard's throughput/health chart. |
 
 ## Jobs
 
@@ -86,7 +87,7 @@ with the HTTP status matching the error (`404` not_found, `409` conflict, `401` 
 | POST | `/api/v1/jobs/{job_id}/start` | worker | `claimed → running`; creates the `JobExecution` row for this attempt. |
 | POST | `/api/v1/jobs/{job_id}/complete` | worker | `running → completed`. |
 | POST | `/api/v1/jobs/{job_id}/fail` | worker | `running →` `scheduled` (retry, backoff applied) or `dead_letter` (attempts exhausted). |
-| POST | `/api/v1/jobs/{job_id}/logs` | worker | Appends a `JobLog` line to the current execution. |
+| POST | `/api/v1/jobs/{job_id}/logs` | worker | Appends a `JobLog` line to the current execution. Called automatically by `run_worker.py` at claim, completion, and failure (best-effort — a logging failure never fails the job), so every execution has a visible log trail without handlers needing to log anything themselves. |
 
 ## Workers (user-facing)
 

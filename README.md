@@ -3,7 +3,8 @@
 A production-inspired distributed job scheduling platform: queues, five job-creation modes
 (immediate/delayed/scheduled/recurring/batch), a worker fleet that claims jobs atomically and
 executes them concurrently, retries with configurable backoff, a dead letter queue, and a
-dashboard to watch it all happen.
+dashboard to watch it all happen — including per-job execution logs streamed live from the
+worker, and a throughput/system-health chart per queue.
 
 Also implements five of the assignment's bonus features: **role-based access control**,
 **distributed locking**, **workflow dependencies** (jobs waiting on other jobs), **WebSocket
@@ -115,12 +116,13 @@ createdb scheduler_test   # or: psql -c "CREATE DATABASE scheduler_test"
 pytest tests/ -v
 ```
 
-33 tests covering auth, RBAC boundaries, all 5 job creation modes, pagination/idempotency, the
+35 tests covering auth, RBAC boundaries, all 5 job creation modes, pagination/idempotency, the
 full worker lifecycle (start → complete / fail → retry-with-backoff → dead letter → retry),
 queue concurrency limits, pause/resume, workflow dependencies (a job with an unmet dependency is
 never claimed), distributed locking (two sessions can't hold the same advisory lock), AI summary
-error paths, and — the one that matters most for a scheduler — concurrent workers racing for the
-same jobs never double-claim (`tests/test_claim_concurrency.py`).
+error paths, throughput/health aggregation (`tests/test_throughput.py`), and — the one that
+matters most for a scheduler — concurrent workers racing for the same jobs never double-claim
+(`tests/test_claim_concurrency.py`).
 
 ## Project structure
 
